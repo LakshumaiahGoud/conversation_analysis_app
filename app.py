@@ -63,7 +63,7 @@ topic_names = get_topic_names(lda, vectorizer)
 df_conversations['topic'] = df_conversations['topic'].apply(lambda x: topic_names.get(x, 'Misc'))
 
 # Display topic counts
-st.subheader("Table 1: Topic Counts")
+st.subheader("Topic Counts")
 topic_counts = df_conversations['topic'].value_counts().reset_index()
 topic_counts.columns = ['Topic', 'Count']
 st.table(topic_counts)
@@ -91,7 +91,7 @@ for i, row in tqdm(df_conversations.iterrows(), total=len(df_conversations), des
     df_conversations.at[i, 'sentiment'] = sentiment_label
 
 # Display sentiment counts
-st.subheader("Table 2: Sentiment Counts")
+st.subheader("Sentiment Counts")
 sentiment_counts = df_conversations['sentiment'].value_counts().reset_index()
 sentiment_counts.columns = ['Sentiment', 'Count']
 st.table(sentiment_counts)
