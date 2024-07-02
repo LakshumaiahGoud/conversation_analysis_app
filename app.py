@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
-from bertopic import BERTopic
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from tqdm import tqdm
 
 st.title("Conversation Analysis App")
 
@@ -10,44 +12,97 @@ st.title("Conversation Analysis App")
 ds = load_dataset("LDJnr/Puffin")
 df = pd.DataFrame(ds['train'])
 
+# Extract human conversations
 conversations = []
-for i, convo in enumerate(df.itertuples()):
-    for turn in convo.turns:
-        if turn['from'] == 'human':
-            conversations.append({
-                'conversation_no': i,
-                'value': turn['value']
-            })
+for i, row in df.iterrows():
+    convo_list = row['conversations']
+    if isinstance(convo_list, list):
+        for turn in convo_list:
+            if turn['from'] == 'human':
+                conversations.append({
+                    'conversation_no': i,
+                    'value': turn['value']
+                })
 
-df = pd.DataFrame(conversations)
+df_conversations = pd.DataFrame(conversations).head(100)
 
-# Topic modeling
-model = BERTopic()
-topics, _ = model.fit_transform(df['value'])
-df['topic'] = topics
-df['topic'] = df['topic'].apply(lambda x: 'Misc' if x == -1 else x)
+# Initialize tokenizer for truncation
+tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-sentiment-latest")
 
-# Sentiment analysis
-sentiment_pipeline = pipeline("sentiment-analysis")
-df['sentiment'] = df['value'].apply(lambda x: sentiment_pipeline(x)[0]['label'])
+# Truncate long text sequences
+def truncate_text(text, max_length=512):
+    tokens = tokenizer.tokenize(text)
+    if len(tokens) > max_length:
+        tokens = tokens[:max_length]
+    truncated_text = tokenizer.convert_tokens_to_string(tokens)
+    return truncated_text
 
-# Display counts
-st.header("Counts")
-st.subheader("Topic Counts")
-topic_counts = df['topic'].value_counts().reset_index()
+# Apply truncation to 'value' column
+df_conversations['value'] = df_conversations['value'].apply(lambda x: truncate_text(x, max_length=512))
+
+# Check text lengths after truncation
+df_conversations['length'] = df_conversations['value'].apply(lambda x: len(tokenizer.tokenize(x)))
+st.write("Checking text lengths after truncation...")
+st.write(df_conversations[['value', 'length']].head())
+
+# Ensure all text sequences are within the limit
+if df_conversations['length'].max() > 512:
+    st.write("Error: Some sequences are still too long after truncation.")
+else:
+    st.write("All sequences are within the allowed length.")
+
+# Topic modeling with LDA
+vectorizer = CountVectorizer(stop_words='english')
+X = vectorizer.fit_transform(df_conversations['value'])
+lda = LatentDirichletAllocation(n_components=10, random_state=0)
+lda.fit(X)
+
+# Assign topics to conversations
+topic_assignments = lda.transform(X).argmax(axis=1)
+df_conversations['topic'] = pd.Series(topic_assignments, index=df_conversations.index)
+
+# Get the top words for each topic
+def get_topic_names(lda_model, vectorizer, n_top_words=10):
+    topic_names = {}
+    words = vectorizer.get_feature_names_out()
+    for topic_idx, topic in enumerate(lda_model.components_):
+        top_words = [words[i] for i in topic.argsort()[:-n_top_words - 1:-1]]
+        topic_names[topic_idx] = " ".join(top_words)
+    return topic_names
+
+topic_names = get_topic_names(lda, vectorizer)
+df_conversations['topic'] = df_conversations['topic'].apply(lambda x: topic_names.get(x, 'Misc'))
+
+# Display topic counts
+st.subheader("Table 1: Topic Counts")
+topic_counts = df_conversations['topic'].value_counts().reset_index()
 topic_counts.columns = ['Topic', 'Count']
 st.table(topic_counts)
 
-st.subheader("Sentiment Counts")
-sentiment_counts = df['sentiment'].value_counts().reset_index()
+# Sentiment analysis with new model
+def analyze_sentiment(text):
+    try:
+        truncated_text = truncate_text(text, max_length=512)
+        result = sentiment_pipeline(truncated_text)
+        if result and len(result) > 0:
+            return result[0]['label']
+        else:
+            return 'neutral'  # Default sentiment if the result is empty
+    except IndexError:
+        return 'neutral'  # Default sentiment for errors
+    except Exception:
+        return 'neutral'  # Default sentiment for errors
+
+sentiment_pipeline = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
+
+# Add progress tracking with tqdm
+st.write("Performing sentiment analysis...")
+for i, row in tqdm(df_conversations.iterrows(), total=len(df_conversations), desc="Processing sentiments"):
+    sentiment_label = analyze_sentiment(row['value'])
+    df_conversations.at[i, 'sentiment'] = sentiment_label
+
+# Display sentiment counts
+st.subheader("Table 2: Sentiment Counts")
+sentiment_counts = df_conversations['sentiment'].value_counts().reset_index()
 sentiment_counts.columns = ['Sentiment', 'Count']
 st.table(sentiment_counts)
-
-# Display sessions
-st.header("Sessions")
-session_page = st.sidebar.number_input("Page number", min_value=1, value=1, step=1)
-sessions_per_page = 50
-start = (session_page - 1) * sessions_per_page
-end = start + sessions_per_page
-
-st.table(df[['conversation_no', 'topic', 'sentiment']].iloc[start:end])
