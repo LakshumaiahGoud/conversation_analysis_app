@@ -24,7 +24,7 @@ for i, row in df.iterrows():
                     'value': turn['value']
                 })
 
-df_conversations = pd.DataFrame(conversations).head(100)
+df_conversations = pd.DataFrame(conversations).head(300)
 
 # Initialize tokenizer for truncation
 tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-sentiment-latest")
@@ -39,17 +39,6 @@ def truncate_text(text, max_length=512):
 
 # Apply truncation to 'value' column
 df_conversations['value'] = df_conversations['value'].apply(lambda x: truncate_text(x, max_length=512))
-
-# Check text lengths after truncation
-df_conversations['length'] = df_conversations['value'].apply(lambda x: len(tokenizer.tokenize(x)))
-st.write("Checking text lengths after truncation...")
-st.write(df_conversations[['value', 'length']].head())
-
-# Ensure all text sequences are within the limit
-if df_conversations['length'].max() > 512:
-    st.write("Error: Some sequences are still too long after truncation.")
-else:
-    st.write("All sequences are within the allowed length.")
 
 # Topic modeling with LDA
 vectorizer = CountVectorizer(stop_words='english')
